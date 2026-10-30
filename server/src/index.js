@@ -6,13 +6,35 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { Store } from './store.js';
 import { Lobby } from './lobby.js';
+import { PgMirror } from './pg-mirror.js';
 
 const PORT = Number(process.env.PORT ?? 2567);
-const DB_FILE = process.env.DB_FILE ?? 'data/ncc.db';
+// DATABASE_URL (e.g. Supabase) = cadets are saved there, for hosts that wipe their disk
+// on restart (Render free). Without it, everything is saved in the local SQLite file.
+const DATABASE_URL = process.env.DATABASE_URL?.trim() || null;
+const DB_FILE = DATABASE_URL ? ':memory:' : (process.env.DB_FILE ?? 'data/ncc.db');
 const MAX_MSGS_PER_SEC = 30;
 
-fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+if (DB_FILE !== ':memory:') fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
 const store = new Store(DB_FILE);
+let mirror = null;
+if (DATABASE_URL) {
+  // Retry while the database wakes up. If it never answers, run without saving rather than
+  // risk overwriting saved cadets with fresh empty profiles.
+  for (let attempt = 1; attempt <= 5 && !mirror; attempt++) {
+    const m = new PgMirror(DATABASE_URL, { ssl: process.env.DATABASE_SSL !== 'disable' });
+    try {
+      const count = await m.load(store);
+      mirror = m;
+      console.log(`Postgres connected: loaded ${count} cadets`);
+    } catch (err) {
+      console.error(`Postgres unavailable (attempt ${attempt}/5): ${err.message}`);
+      await m.pool.end().catch(() => {});
+      if (attempt < 5) await new Promise((r) => setTimeout(r, attempt * 3000));
+    }
+  }
+  if (!mirror) console.error('Database unavailable: progress will NOT be saved until the server restarts with a working DATABASE_URL.');
+}
 const lobby = new Lobby(store);
 
 // The browser version of the game (Godot web export) is served from WEB_DIR, so one
@@ -52,7 +74,8 @@ function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, rooms: lobby.rooms.size, sessions: lobby.sessions.size }));
+    const database = mirror ? 'postgres' : DATABASE_URL ? 'unavailable' : 'sqlite';
+    return res.end(JSON.stringify({ ok: true, rooms: lobby.rooms.size, sessions: lobby.sessions.size, database }));
   }
   if (req.method === 'GET' && serveStatic(req, res)) return;
   res.writeHead(404, { 'content-type': 'text/plain' });
@@ -99,8 +122,14 @@ setInterval(() => lobby.tick(), 100);
 setInterval(() => lobby.sweep(), 5000);
 setInterval(() => lobby.broadcastStats(), 2000);
 
-server.listen(PORT, () => console.log(`NCC Cadet Challenge server on :${PORT} (db: ${DB_FILE})`));
+server.listen(PORT, () => console.log(`NCC Cadet Challenge server on :${PORT} (db: ${mirror ? 'postgres' : DB_FILE})`));
 
-const shutdown = () => { server.close(); store.close(); process.exit(0); };
+// Render stops the old server on every deploy: save pending changes first.
+const shutdown = async () => {
+  server.close();
+  await mirror?.close().catch((err) => console.error('Final save failed', err.message));
+  store.close();
+  process.exit(0);
+};
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

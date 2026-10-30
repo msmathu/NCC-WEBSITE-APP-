@@ -29,11 +29,11 @@ Every tool and service used is free.
 |---|---|---|
 | Game client | Godot 4.7 (GDScript) | MIT, free |
 | Game server | Node.js + [`ws`](https://github.com/websockets/ws) | MIT, free |
-| Database | Node's built-in `node:sqlite` (one file) | free, no DB server |
+| Database | Node's built-in `node:sqlite` (one file); Supabase Postgres when hosted on Render | free |
 | Art | Drawn in code (`cadet_art.gd`, `world.gd`) | no assets to license |
 | Music / SFX | Synthesised at startup (`sfx.gd`) | no assets to license |
 | Voice commands | The phone's built-in text-to-speech (Hindi voice when installed) | free |
-| Hosting | Oracle Cloud Always Free VM, Mumbai/Hyderabad region | free |
+| Hosting | Render free web service (or an Oracle Cloud Always Free VM) | free |
 
 ## Folder layout
 
@@ -52,6 +52,7 @@ client/            Godot project (open this folder in Godot)
 server/            Node.js lobby / matchmaking / race server
   src/lobby.js     rooms, bots, race sync, results, anti-cheat
   src/store.js     cadet profiles + directorate leaderboard (SQLite)
+  src/pg-mirror.js loads/saves cadets in Postgres (Supabase) when DATABASE_URL is set
   test/            node:test suite
 _tools/            Godot 4.7.2 editor + export templates (self-contained, not committed)
 build/             exported APK
@@ -169,7 +170,19 @@ cd client
 
 It can also go on **GitHub Pages** for free: in the repo, open Settings → Pages → Branch `main`, folder `/docs`. Pages sites use `server.json` to find the game server. You can add `?server=wss://host` to any web link to use a different server.
 
-## Permanent free hosting (always on, players anywhere in India)
+## Permanent free hosting on Render + Supabase (no PC needed)
+
+`render.yaml` sets up **one free Render web service** that runs the game server and serves the web game. Profiles and the leaderboard are saved in a free **Supabase** Postgres database (table `ncc_cadets`), because Render's free disk is wiped on every restart. Your PC doesn't need to be on.
+
+1. **Supabase:** create a free project (or reuse one). Click **Connect → Session pooler** and copy the URI (port 5432). Replace `[YOUR-PASSWORD]` with the database password; use only letters and numbers in it.
+2. **Render:** **New → Blueprint** → connect GitHub → pick `NCC-WEBSITE-APP-` → **Apply**. Paste the URI into `DATABASE_URL`.
+3. Wait for **Live**, then open `https://<service>.onrender.com/health`. It should say `"database":"postgres"`.
+4. Set `server.json` to `{"server": "wss://<service>.onrender.com", "web": "https://<service>.onrender.com"}` and push. Installed apps switch over by themselves.
+5. **Don't run `GO-PUBLIC.bat` any more:** it overwrites `server.json` with a temporary tunnel address.
+
+Free-plan limits: the service sleeps after 15 minutes without players, and the first player waits about a minute while it wakes (the app retries by itself). Each Render workspace gets 750 free hours a month, shared by all its free services. Without `DATABASE_URL` the server uses the local SQLite file (`server/data/ncc.db`), as on a PC.
+
+## Permanent free hosting on an Oracle VM (always on, players anywhere in India)
 
 1. Create an **Oracle Cloud Free Tier** account and choose **India West (Mumbai)** or **India South (Hyderabad)** as the home region.
 2. Create an *Always Free* **Ampere A1** VM running Ubuntu. Open **TCP 2567** in the VCN security list.

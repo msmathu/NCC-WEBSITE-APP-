@@ -5,6 +5,8 @@ import { DIRECTORATES, RANKS, UNLOCKS, rankIndexFor } from './course.js';
 
 export class Store {
   constructor(file = 'data/ncc.db') {
+    /** Called with a device id after that cadet changes (used by PgMirror). */
+    this.onChange = null;
     this.db = new DatabaseSync(file);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -53,6 +55,7 @@ export class Store {
     const now = Date.now();
     if (this.q.get.get(deviceId)) this.q.identity.run(name, directorate, now, deviceId);
     else this.q.insert.run(deviceId, name, directorate, now);
+    this.onChange?.(deviceId);
     return this.profile(deviceId);
   }
 
@@ -88,12 +91,14 @@ export class Store {
       if (need > p.rankIndex) return { ok: false, error: `${value} ${kind} unlocks at ${RANKS[need].name}` };
     }
     this.q.look.run(uniform, beret, badge, Date.now(), deviceId);
+    this.onChange?.(deviceId);
     return { ok: true, profile: this.profile(deviceId) };
   }
 
   recordRace(deviceId, { dp, won, timeMs }) {
     const t = timeMs ?? null;
     this.q.race.run(dp, won ? 1 : 0, t, t, t, Date.now(), deviceId);
+    this.onChange?.(deviceId);
     return this.profile(deviceId);
   }
 
@@ -108,6 +113,29 @@ export class Store {
       bestMs: r.best_ms, rank: RANKS[rankIndexFor(r.dp)].name,
     }));
     return { directorates, top, directorate };
+  }
+
+  /** The stored row exactly as saved (for copying to another database). */
+  rawRow(deviceId) {
+    return this.q.get.get(deviceId) ?? null;
+  }
+
+  /** Bulk-loads cadet rows (from PgMirror) without triggering onChange. */
+  importRows(rows) {
+    const insert = this.db.prepare(`
+      INSERT OR REPLACE INTO cadets (device_id, name, directorate, dp, races, wins, best_ms, uniform, beret, badge, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    this.db.exec('BEGIN');
+    try {
+      for (const r of rows) {
+        insert.run(r.device_id, r.name, r.directorate, r.dp, r.races, r.wins, r.best_ms ?? null,
+          r.uniform, r.beret, r.badge, r.updated_at);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   close() { this.db.close(); }

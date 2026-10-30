@@ -1,0 +1,21 @@
+# Render Blueprint: ONE free web service that runs the game server AND serves the web game
+# (docs/). Render dashboard → New → Blueprint → select this repository → fill in DATABASE_URL.
+# The address will be https://<service-name>.onrender.com (wss://… for the apps).
+services:
+  - type: web
+    name: ncc-cadet-challenge
+    runtime: node
+    plan: free
+    # Closest free region to India.
+    region: singapore
+    buildCommand: cd server && npm ci
+    startCommand: cd server && npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      # Supabase "Session pooler" connection string (port 5432). Cadet profiles and the
+      # leaderboard are saved there; Render's free disk is wiped on every restart.
+      - key: DATABASE_URL
+        sync: false
